@@ -4,6 +4,11 @@ import { execSync } from 'child_process';
 
 export interface AppConfig {
   ytdlpPath: string;
+  // Opsional, default false: hanya aktifkan di lingkungan yang akses
+  // internetnya lewat proxy MITM dengan CA yang tidak dipercaya bundle
+  // sertifikat bawaan yt-dlp (mis. VM ini). Di PC/lokal biasa biarkan
+  // false agar verifikasi sertifikat TLS yt-dlp tetap aktif.
+  ytdlpNoCheckCertificates: boolean;
   ffmpegPath: string;
   downloadDir: string;
   maxConcurrentDownloads: number;
@@ -137,6 +142,9 @@ export function getConfig(): AppConfig {
 
   cachedConfigInstance = {
     ytdlpPath: ytdlp,
+    ytdlpNoCheckCertificates:
+      process.env.YTDLP_NO_CHECK_CERTIFICATES === 'true' ||
+      process.env.YTDLP_NO_CHECK_CERTIFICATES === '1',
     ffmpegPath: ffmpeg,
     downloadDir: resolvedDownloadDir,
     maxConcurrentDownloads: Math.max(1, parseInt(process.env.MAX_CONCURRENT_DOWNLOADS || '1', 10) || 1),

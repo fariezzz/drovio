@@ -283,6 +283,11 @@ class JobManager {
       'DOWNLOAD_PROGRESS:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s',
     ];
 
+    // Hanya bila YTDLP_NO_CHECK_CERTIFICATES=true (lihat config.ts).
+    if (config.ytdlpNoCheckCertificates) {
+      args.push('--no-check-certificates');
+    }
+
     // Tentukan lokasi ffmpeg jika terdeteksi
     if (config.ffmpegPath) {
       args.push('--ffmpeg-location', config.ffmpegPath);

@@ -283,6 +283,14 @@ export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
       safeUrl,
     ];
 
+    // Hanya bila YTDLP_NO_CHECK_CERTIFICATES=true (lihat config.ts):
+    // lingkungan dengan egress proxy MITM yang CA-nya tidak dipercaya
+    // bundle sertifikat bawaan yt-dlp, yang kalau tidak diaktifkan bisa
+    // gagal CERTIFICATE_VERIFY_FAILED dan berujung timeout di UI.
+    if (config.ytdlpNoCheckCertificates) {
+      args.push('--no-check-certificates');
+    }
+
     const child = spawn(config.ytdlpPath, args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],

@@ -51,3 +51,4 @@ Thumbs.db
 *.sln
 *.sw?
 PANDUAN_SETUP.md
+.cloudflared-token

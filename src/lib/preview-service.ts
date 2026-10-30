@@ -84,6 +84,11 @@ export async function ensurePreviewMedia(
       filePath,
     ];
 
+    // Hanya bila YTDLP_NO_CHECK_CERTIFICATES=true (lihat config.ts).
+    if (config.ytdlpNoCheckCertificates) {
+      args.push('--no-check-certificates');
+    }
+
     if (config.ffmpegPath) {
       args.push('--ffmpeg-location', config.ffmpegPath);
     }
