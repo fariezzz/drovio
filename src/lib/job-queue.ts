@@ -39,6 +39,7 @@ class JobManager {
     request: DownloadRequest,
     mediaDetails: {
       title: string;
+      ownerSessionId: string;
       platform: PlatformType;
       platformName: string;
       thumbnail?: string;
@@ -68,6 +69,7 @@ class JobManager {
 
     const job: Job = {
       id,
+      ownerSessionId: mediaDetails.ownerSessionId,
       url: request.url,
       title: mediaDetails.title,
       platform: mediaDetails.platform,

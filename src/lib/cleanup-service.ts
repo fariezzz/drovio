@@ -67,21 +67,59 @@ class CleanupService {
     return this.cleanFilesOlderThan(this.retentionMinutes);
   }
 
-  // Jalankan pembersihan manual dengan batas waktu tertentu
-  public cleanNow(minutes?: number): { deletedFiles: number; deletedBytes: number; message: string } {
-    const targetMinutes = typeof minutes === 'number' ? Math.max(0, minutes) : this.retentionMinutes;
-    const result = this.cleanFilesOlderThan(targetMinutes);
+  // Bersihkan hasil unduhan milik sesi browser yang sedang meminta.
+  // File milik sesi lain tidak pernah disentuh.
+  public cleanNow(sessionId: string): { deletedFiles: number; deletedBytes: number; message: string } {
+    const result = this.cleanOwnedFiles(sessionId);
 
     const message =
       result.deletedFiles > 0
-        ? `Berhasil membersihkan ${result.deletedFiles} berkas kedaluwarsa (${formatBytes(result.deletedBytes)} ruang dibebaskan).`
-        : 'Tidak ada berkas kedaluwarsa yang perlu dibersihkan.';
+        ? `Berhasil membersihkan ${result.deletedFiles} berkas (${formatBytes(result.deletedBytes)} ruang dibebaskan).`
+        : 'Tidak ada berkas milik sesi ini yang dapat dibersihkan.';
 
     return {
       deletedFiles: result.deletedFiles,
       deletedBytes: result.deletedBytes,
       message,
     };
+  }
+
+  private cleanOwnedFiles(sessionId: string): { deletedFiles: number; deletedBytes: number } {
+    const filesToDelete = new Set<string>();
+
+    try {
+      const jobManager = getJobManager();
+      for (const job of jobManager.listJobs(100)) {
+        const isActive =
+          job.status === 'pending' ||
+          job.status === 'downloading' ||
+          job.status === 'processing';
+        if (!isActive && job.ownerSessionId === sessionId && job.outputFilepath) {
+          filesToDelete.add(path.resolve(job.outputFilepath));
+        }
+      }
+    } catch {
+      // Jika status pekerjaan tidak dapat dibaca, jangan hapus file apa pun.
+    }
+
+    let deletedFiles = 0;
+    let deletedBytes = 0;
+    for (const fullPath of filesToDelete) {
+      try {
+        if (!fs.existsSync(fullPath)) continue;
+        const stats = fs.statSync(fullPath);
+        fs.unlinkSync(fullPath);
+        deletedFiles++;
+        deletedBytes += stats.size;
+        this.totalDeletedFiles++;
+        this.totalDeletedBytes += stats.size;
+      } catch {
+        // Abaikan file yang terkunci atau tidak dapat dihapus.
+      }
+    }
+
+    this.lastRunTime = Date.now();
+    return { deletedFiles, deletedBytes };
   }
 
   // Hapus berkas yang lebih lama dari N menit

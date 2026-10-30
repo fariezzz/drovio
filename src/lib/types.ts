@@ -62,6 +62,8 @@ export interface DownloadRequest {
 
 export interface Job {
   id: string;
+  // Identitas sesi browser pemilik riwayat, tidak dikirim ke UI.
+  ownerSessionId: string;
   url: string;
   title: string;
   platform: PlatformType;

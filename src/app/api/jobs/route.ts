@@ -3,20 +3,38 @@ import { getJobManager } from '@/lib/job-queue';
 import { validateAndSanitizeUrl, detectPlatform } from '@/lib/security';
 import { DownloadRequest } from '@/lib/types';
 import { deletePreviewMedia } from '@/lib/preview-service';
+import {
+  getOrCreateSessionId,
+  setPrivateSessionCookie,
+} from '@/lib/private-history';
+import { toPublicJob, toPublicJobs } from '@/lib/job-access';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const manager = getJobManager();
-  const jobs = manager.listJobs();
-  return NextResponse.json({
-    success: true,
-    data: jobs,
-  });
+  const { sessionId, isNew } = getOrCreateSessionId(req);
+  const jobs = manager.listJobs().filter((job) => job.ownerSessionId === sessionId);
+  const response = NextResponse.json(
+    {
+      success: true,
+      data: toPublicJobs(jobs),
+    },
+    {
+      headers: {
+        'Cache-Control': 'private, no-store',
+        Vary: 'Cookie',
+      },
+    }
+  );
+
+  if (isNew) setPrivateSessionCookie(response, sessionId, req.nextUrl.protocol === 'https:');
+  return response;
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const { sessionId, isNew } = getOrCreateSessionId(req);
     const body = await req.json().catch(() => ({}));
     const { url, type, qualityId, title, thumbnail, trimStart, trimEnd, subtitleLang } = body;
 
@@ -62,6 +80,7 @@ export async function POST(req: NextRequest) {
     const manager = getJobManager();
     const job = manager.createJob(downloadReq, {
       title: (title && typeof title === 'string') ? title.slice(0, 200) : 'Media Unduhan',
+      ownerSessionId: sessionId,
       platform: platformInfo.platform,
       platformName: platformInfo.platformName,
       thumbnail: typeof thumbnail === 'string' ? thumbnail : undefined,
@@ -70,10 +89,18 @@ export async function POST(req: NextRequest) {
     // Otomatis hapus berkas cache preview setelah pengguna mengklik unduh untuk menghemat ruang disk
     deletePreviewMedia(validation.url);
 
-    return NextResponse.json(
-      { success: true, data: job },
-      { status: 201 }
+    const response = NextResponse.json(
+      { success: true, data: toPublicJob(job) },
+      {
+        status: 201,
+        headers: {
+          'Cache-Control': 'private, no-store',
+          Vary: 'Cookie',
+        },
+      }
     );
+    if (isNew) setPrivateSessionCookie(response, sessionId, req.nextUrl.protocol === 'https:');
+    return response;
   } catch (err: unknown) {
     const error = err as Error;
     return NextResponse.json(

@@ -3,6 +3,8 @@ import { getJobManager } from '@/lib/job-queue';
 import { validateAndSanitizeUrl, detectPlatform } from '@/lib/security';
 import { DownloadRequest, Job } from '@/lib/types';
 import { deletePreviewMedia } from '@/lib/preview-service';
+import { getOrCreateSessionId, setPrivateSessionCookie } from '@/lib/private-history';
+import { toPublicJobs } from '@/lib/job-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +18,7 @@ interface BatchItemPayload {
 
 export async function POST(req: NextRequest) {
   try {
+    const { sessionId, isNew } = getOrCreateSessionId(req);
     const body = await req.json().catch(() => ({}));
     const { items, urls, type = 'video', qualityId = 'best' } = body;
 
@@ -75,6 +78,7 @@ export async function POST(req: NextRequest) {
 
       const job = manager.createJob(downloadReq, {
         title: jobTitle,
+        ownerSessionId: sessionId,
         platform: platformInfo.platform,
         platformName: platformInfo.platformName,
         thumbnail: typeof item.thumbnail === 'string' ? item.thumbnail : undefined,
@@ -91,15 +95,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         success: true,
         count: createdJobs.length,
-        data: createdJobs,
+        data: toPublicJobs(createdJobs),
         errors: errors.length > 0 ? errors : undefined,
       },
-      { status: 201 }
+      {
+        status: 201,
+        headers: {
+          'Cache-Control': 'private, no-store',
+          Vary: 'Cookie',
+        },
+      }
     );
+    if (isNew) setPrivateSessionCookie(response, sessionId, req.nextUrl.protocol === 'https:');
+    return response;
   } catch (err: unknown) {
     const error = err as Error;
     return NextResponse.json(

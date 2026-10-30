@@ -4,6 +4,11 @@ import path from 'path';
 import { getJobManager } from '@/lib/job-queue';
 import { getConfig } from '@/lib/config';
 import { isPathInside } from '@/lib/security';
+import {
+  getOrCreateSessionId,
+  setPrivateSessionCookie,
+} from '@/lib/private-history';
+import { canAccessPrivateJob } from '@/lib/job-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,15 +18,15 @@ interface RouteContext {
   };
 }
 
-export async function GET(_req: NextRequest, { params }: RouteContext) {
-  const { id } = params;
+export async function GET(req: NextRequest, { params }: RouteContext) {
+  const { sessionId, isNew } = getOrCreateSessionId(req);
   const manager = getJobManager();
-  const job = manager.getJob(id);
+  const job = manager.getJob(params.id);
   const config = getConfig();
 
-  if (!job) {
+  if (!job || !canAccessPrivateJob(job.ownerSessionId, sessionId)) {
     return NextResponse.json(
-      { success: false, error: 'Pekerjaan unduhan tidak ditemukan.' },
+      { success: false, error: 'File unduhan tidak ditemukan.' },
       { status: 404 }
     );
   }
@@ -33,7 +38,6 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
     );
   }
 
-  // Verifikasi keamanan path: tidak boleh keluar dari direktori unduhan
   if (!isPathInside(config.downloadDir, job.outputFilepath)) {
     return NextResponse.json(
       { success: false, error: 'Akses ke file ditolak (keamanan direktori).' },
@@ -59,19 +63,12 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
     else if (ext === '.webm') contentType = 'video/webm';
     else if (ext === '.m4a') contentType = 'audio/mp4';
 
-    // Baca file sebagai ReadableStream untuk transfer efisien
     const nodeStream = fs.createReadStream(job.outputFilepath);
     const webStream = new ReadableStream({
       start(controller) {
-        nodeStream.on('data', (chunk) => {
-          controller.enqueue(chunk);
-        });
-        nodeStream.on('end', () => {
-          controller.close();
-        });
-        nodeStream.on('error', (err) => {
-          controller.error(err);
-        });
+        nodeStream.on('data', (chunk) => controller.enqueue(chunk));
+        nodeStream.on('end', () => controller.close());
+        nodeStream.on('error', (err) => controller.error(err));
       },
       cancel() {
         nodeStream.destroy();
@@ -80,8 +77,7 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
 
     const safeAscii = filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
     const encodedFilename = encodeURIComponent(filename);
-
-    return new Response(webStream, {
+    const response = new NextResponse(webStream, {
       status: 200,
       headers: {
         'Content-Type': contentType,
@@ -90,6 +86,9 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
     });
+
+    if (isNew) setPrivateSessionCookie(response, sessionId, req.nextUrl.protocol === 'https:');
+    return response;
   } catch (err: unknown) {
     const error = err as Error;
     return NextResponse.json(

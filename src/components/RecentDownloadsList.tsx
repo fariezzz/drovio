@@ -21,11 +21,15 @@ import {
 import { Job } from '@/lib/types';
 
 interface CleanupStatus {
+  enabled: boolean;
   retentionMinutes: number;
-  totalTrackedJobs: number;
-  filesDeletedInLastRun: number;
-  lastRunTimestamp: number | null;
-  downloadDir: string;
+  lastRunTime?: number;
+  lastRunFormatted?: string;
+  totalDeletedFiles: number;
+  totalDeletedBytes: number;
+  totalDeletedFormatted: string;
+  lastDeletedFiles?: number;
+  lastDeletedBytes?: number;
 }
 
 interface RecentDownloadsListProps {
@@ -50,11 +54,13 @@ export default function RecentDownloadsList({
     fetch('/api/system/cleanup', { cache: 'no-store' })
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && data.status) {
-          setCleanupStatus(data.status);
+        if (data.success && data.data) {
+          setCleanupStatus(data.data);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        setCleanupMessage('Gagal memuat pengaturan penyimpanan.');
+      });
   }, []);
 
   const handleRetentionChange = async (minutes: number) => {
@@ -65,12 +71,17 @@ export default function RecentDownloadsList({
         body: JSON.stringify({ action: 'update_retention', retentionMinutes: minutes }),
       });
       const data = await res.json();
-      if (data.success && data.status) {
-        setCleanupStatus(data.status);
-        setCleanupMessage(data.message);
-        setTimeout(() => setCleanupMessage(null), 3000);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Gagal mengubah pengaturan penyimpanan.');
       }
-    } catch {}
+      if (data.data) {
+        setCleanupStatus(data.data);
+      }
+      setCleanupMessage(data.message || 'Pengaturan penyimpanan diperbarui.');
+      setTimeout(() => setCleanupMessage(null), 3000);
+    } catch (error) {
+      setCleanupMessage(error instanceof Error ? error.message : 'Gagal mengubah pengaturan penyimpanan.');
+    }
   };
 
   const handleCleanNow = async () => {
@@ -83,13 +94,17 @@ export default function RecentDownloadsList({
         body: JSON.stringify({ action: 'clean_now' }),
       });
       const data = await res.json();
-      if (data.success) {
-        setCleanupMessage(data.message);
-        onRefresh();
-        setTimeout(() => setCleanupMessage(null), 3000);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Gagal membersihkan berkas.');
       }
-    } catch {
-      setCleanupMessage('Gagal membersihkan berkas.');
+      if (data.data) {
+        setCleanupStatus(data.data);
+      }
+      setCleanupMessage(data.message || 'Pembersihan selesai.');
+      onRefresh();
+      setTimeout(() => setCleanupMessage(null), 3000);
+    } catch (error) {
+      setCleanupMessage(error instanceof Error ? error.message : 'Gagal membersihkan berkas.');
     } finally {
       setIsCleaning(false);
     }
@@ -139,7 +154,7 @@ export default function RecentDownloadsList({
               Riwayat Unduhan
             </h3>
             <p className="text-[11px] sm:text-xs text-obsidian-muted">
-              Daftar berkas yang baru saja Anda unduh pada sesi ini.
+              Hanya terlihat di perangkat dan sesi browser ini.
             </p>
           </div>
         </div>

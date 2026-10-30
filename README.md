@@ -45,6 +45,7 @@ Drovio adalah aplikasi web serbaguna untuk kebutuhan pengunduhan media dari berb
 - **Tema Gelap & Terang:** Tersedia tombol pengganti tema dengan palet Obsidian yang nyaman di mata, tersimpan di penyimpanan lokal tanpa efek kedip (*anti-flicker*).
 - **Bilah Navigasi Cepat Mobile:** Tata letak khusus layar HP dengan 4 tab cepat: `[Unduh]`, `[Kompres]`, `[Konversi]`, dan `[Riwayat]`.
 - **Dukungan Web Share API:** Tombol bagikan langsung memicu menu share bawaan ponsel pintar (WhatsApp, Telegram, dsb.) atau menyalin tautan unduhan ke papan klip di desktop.
+- **Riwayat Privat per Sesi:** Riwayat dan berkas unduhan hanya dikaitkan dengan sesi browser pemiliknya melalui cookie HTTP-only. Pengguna atau browser lain tidak dapat melihat, membatalkan, atau mengambil riwayat dan berkas tersebut.
 
 ---
 
