@@ -115,13 +115,29 @@ export function detectPlatform(urlStr: string): { platform: PlatformType; platfo
   }
 }
 
-// Sanitasi nama file agar aman di Windows dan sistem operasi lain
+// Potong berdasarkan byte UTF-8 agar aman di Linux, Windows, dan filesystem jaringan.
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = '';
+  let byteLength = 0;
+
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (byteLength + characterBytes > maxBytes) break;
+    result += character;
+    byteLength += characterBytes;
+  }
+
+  return result;
+}
+
+// Sanitasi nama file agar aman di Windows dan sistem operasi lain.
+// Batas 120 byte menyisakan ruang untuk suffix job ID, ekstensi, dan .part.
 export function sanitizeWindowsFilename(rawName: string, fallback: string = 'media-download'): string {
   if (!rawName || typeof rawName !== 'string') {
     return fallback;
   }
 
-  // 1. Hapus karakter terlarang di Windows: < > : " / \ | ? * dan karakter kontrol
+  // 1. Hapus karakter terlarang di Windows: < > : " / \\ | ? * dan karakter kontrol
   let safe = rawName
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, '')
@@ -137,12 +153,12 @@ export function sanitizeWindowsFilename(rawName: string, fallback: string = 'med
     safe = `file_${safe}`;
   }
 
-  // 4. Batasi panjang karakter (maksimal 150 karakter)
-  if (safe.length > 150) {
-    const ext = path.extname(safe);
-    const nameWithoutExt = path.basename(safe, ext);
-    safe = nameWithoutExt.slice(0, 150 - ext.length) + ext;
-  }
+  // 4. Batasi berdasarkan byte, bukan jumlah karakter. Karakter CJK/emoji memakai >1 byte.
+  const extensionMatch = safe.match(/\.[A-Za-z0-9]{1,8}$/);
+  const ext = extensionMatch?.[0] || '';
+  const nameWithoutExt = ext ? safe.slice(0, -ext.length) : safe;
+  const extBytes = Buffer.byteLength(ext, 'utf8');
+  safe = `${truncateUtf8(nameWithoutExt, Math.max(1, 120 - extBytes))}${ext}`;
 
   return safe.length > 0 ? safe : fallback;
 }

@@ -74,6 +74,18 @@ function detectPlatform(urlStr) {
   }
 }
 
+function truncateUtf8(value, maxBytes) {
+  let result = '';
+  let size = 0;
+  for (const character of value) {
+    const characterSize = Buffer.byteLength(character, 'utf8');
+    if (size + characterSize > maxBytes) break;
+    result += character;
+    size += characterSize;
+  }
+  return result;
+}
+
 function sanitizeWindowsFilename(rawName, fallback = 'media-download') {
   if (!rawName || typeof rawName !== 'string') return fallback;
 
@@ -90,9 +102,10 @@ function sanitizeWindowsFilename(rawName, fallback = 'media-download') {
     safe = `file_${safe}`;
   }
 
-  if (safe.length > 150) {
-    safe = safe.slice(0, 150);
-  }
+  const extensionMatch = safe.match(/\.[A-Za-z0-9]{1,8}$/);
+  const ext = extensionMatch?.[0] || '';
+  const base = ext ? safe.slice(0, -ext.length) : safe;
+  safe = `${truncateUtf8(base, Math.max(1, 120 - Buffer.byteLength(ext, 'utf8')))}${ext}`;
 
   return safe.length > 0 ? safe : fallback;
 }
@@ -167,4 +180,10 @@ test('Sanitasi Nama File Windows (Karakter Terlarang & Reserved Names)', () => {
 
   const reservedPrn = sanitizeWindowsFilename('prn.mp4');
   assert.equal(reservedPrn.startsWith('file_'), true);
+
+  const longUnicodeTitle = sanitizeWindowsFilename(
+    '6.5K views · 513 reactions Talulah and Ch’en🥰 Bgm Photograph by Ed Sheeran 歌詞翻譯來源：【本文原創於：Music-Cool 音樂庫 (music-cool.tw)】 原文連結：httpswww.htmlm=1 #arkn'
+  );
+  assert.ok(Buffer.byteLength(longUnicodeTitle, 'utf8') <= 120);
+  assert.equal(longUnicodeTitle.includes('�'), false);
 });
