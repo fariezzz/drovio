@@ -1,0 +1,52 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Next.js build output
+/.next/
+/out/
+/build/
+*.tsbuildinfo
+next-env.d.ts.bak
+
+# Testing & Coverage
+/coverage
+
+# Environment & local credentials
+.env*.local
+.env
+!.env.example
+
+# Downloads & generated user media files
+/downloads/*
+!/downloads/.gitkeep
+/downloads/compressed/*
+!/downloads/compressed/.gitkeep
+/downloads/converted/*
+!/downloads/converted/.gitkeep
+/downloads/previews/*
+!/downloads/previews/.gitkeep
+/temp/
+
+# Logs, archives & session history
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+drovio.md
+*.tmp
+*.temp
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+*.pem
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
