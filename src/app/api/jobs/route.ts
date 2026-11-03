@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJobManager } from '@/lib/job-queue';
-import { validateAndSanitizeUrl, detectPlatform } from '@/lib/security';
+import { validateAndSanitizeUrl, detectPlatform, checkHostResolvesPublic } from '@/lib/security';
 import { DownloadRequest } from '@/lib/types';
 import { deletePreviewMedia } from '@/lib/preview-service';
 import {
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
   try {
     const { sessionId, isNew } = getOrCreateSessionId(req);
     const body = await req.json().catch(() => ({}));
-    const { url, type, qualityId, title, thumbnail, trimStart, trimEnd, subtitleLang } = body;
+    const { url, type, qualityId, title, thumbnail, trimStart, trimEnd, subtitleLang, youtubeClient } = body;
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json(
@@ -49,6 +49,15 @@ export async function POST(req: NextRequest) {
     if (!validation.valid || !validation.url) {
       return NextResponse.json(
         { success: false, error: validation.error || 'URL tidak valid.' },
+        { status: 400 }
+      );
+    }
+
+    // P2: cek resolusi DNS sebelum job dibuat (SSRF via DNS).
+    const dnsCheck = await checkHostResolvesPublic(new URL(validation.url).hostname);
+    if (!dnsCheck.ok) {
+      return NextResponse.json(
+        { success: false, error: dnsCheck.error || 'Domain ditolak demi keamanan.' },
         { status: 400 }
       );
     }
@@ -75,6 +84,8 @@ export async function POST(req: NextRequest) {
       trimStart: typeof trimStart === 'string' && trimStart.trim() ? trimStart.trim() : undefined,
       trimEnd: typeof trimEnd === 'string' && trimEnd.trim() ? trimEnd.trim() : undefined,
       subtitleLang: typeof subtitleLang === 'string' && subtitleLang.trim() ? subtitleLang.trim() : undefined,
+      // Hanya 'android' yang diizinkan; nilai lain diabaikan.
+      youtubeClient: youtubeClient === 'android' ? 'android' : undefined,
     };
 
     const manager = getJobManager();

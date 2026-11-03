@@ -9,6 +9,10 @@ import BatchActiveJobsCard from '@/components/BatchActiveJobsCard';
 import RecentDownloadsList from '@/components/RecentDownloadsList';
 import FileCompressorSection from '@/components/FileCompressorSection';
 import FileConverterSection from '@/components/FileConverterSection';
+// YoutubeCookiesSettings sengaja TIDAK diimpor di halaman publik
+// (2026-11-02, permintaan pemilik: situs untuk publik, "tinggal pakai").
+// Komponen dan API-nya tetap ada di codebase untuk pemilik, yang bisa
+// mengupload cookie lewat API langsung, tapi tidak ditampilkan ke publik.
 import { MediaPreview, Job } from '@/lib/types';
 import { ShieldCheck, Zap } from 'lucide-react';
 
@@ -113,7 +117,7 @@ export default function HomePage() {
   const handleStartDownload = async (
     type: 'video' | 'audio',
     qualityId: string,
-    options?: { trimStart?: string; trimEnd?: string; subtitleLang?: string }
+    options?: { trimStart?: string; trimEnd?: string; subtitleLang?: string; youtubeClient?: 'android' }
   ) => {
     if (!preview) return;
 
@@ -131,6 +135,7 @@ export default function HomePage() {
           trimStart: options?.trimStart,
           trimEnd: options?.trimEnd,
           subtitleLang: options?.subtitleLang,
+          youtubeClient: options?.youtubeClient,
         }),
       });
 
@@ -288,6 +293,7 @@ export default function HomePage() {
                 isLoading={isLoadingJobs}
                 onCompressFile={handleCompressFromHistory}
               />
+
             </div>
           )}
 

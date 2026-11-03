@@ -3,7 +3,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { getConfig } from './config';
-import { validateAndSanitizeUrl } from './security';
+import { validateAndSanitizeUrl, checkHostResolvesPublic } from './security';
+import { getYoutubeCookiesArgs } from './youtube-cookies';
 
 interface PreviewTask {
   promise: Promise<string>;
@@ -41,6 +42,13 @@ export async function ensurePreviewMedia(
   }
 
   const safeUrl = validation.url;
+
+  // P2: cek resolusi DNS sebelum yt-dlp dipanggil (SSRF via DNS).
+  const dnsCheck = await checkHostResolvesPublic(new URL(safeUrl).hostname);
+  if (!dnsCheck.ok) {
+    return { ready: false, streamUrl: '', error: dnsCheck.error || 'Domain ditolak demi keamanan.' };
+  }
+
   const filePath = getPreviewFilePath(safeUrl);
   const streamUrl = `/api/media/stream?url=${encodeURIComponent(safeUrl)}`;
 
@@ -70,7 +78,22 @@ export async function ensurePreviewMedia(
 
   // 3. Mulai proses pembuatan preview media aktual di latar belakang menggunakan yt-dlp
   const config = getConfig();
-  const taskPromise = new Promise<string>((resolve, reject) => {
+  const isYoutube = safeUrl.includes('youtube.com') || safeUrl.includes('youtu.be');
+  const isBotError = (msg: string): boolean => {
+    const l = (msg || '').toLowerCase();
+    return l.includes('sign in') || l.includes('not a bot') || l.includes('cookies') ||
+      l.includes('login required') || l.includes('requested format is not available') ||
+      l.includes('video is unavailable');
+  };
+  // Satu percobaan yt-dlp. Sengaja TIDAK menyentuh activePreviewTasks di
+  // sini: wrapper di bawah yang mengatur map, supaya percobaan kedua
+  // (Android) tidak kehilangan jejak tugas yang sedang ditunggu pemanggil
+  // lain. Bug sebelumnya: handler close percobaan pertama menghapus map,
+  // dan pesan error dipotong jadi 200 karakter terakhir — ekor pesan
+  // bot-check YouTube itu cuma URL FAQ cookies, frasa 'Sign in to
+  // confirm' di awal pesan hilang, jadi pengecekan retry tidak pernah
+  // terpicu dan preview selalu 404. Sekarang pesan lengkap dipakai.
+  const runPreviewAttempt = (useAndroid: boolean) => new Promise<string>((resolve, reject) => {
     // Gunakan format resolusi cepat (360p / 480p) agar preview video aktual segera siap
     const args: string[] = [
       '--newline',
@@ -83,6 +106,19 @@ export async function ensurePreviewMedia(
       '-o',
       filePath,
     ];
+
+    // YouTube fallback: sama seperti inspectMedia, client Android kalau
+    // web kena bot-check. Format preview sudah 360p/18 duluan, jadi
+    // Android cocok tanpa perubahan format.
+    if (useAndroid) {
+      args.push('--extractor-args', 'youtube:player_client=android');
+    }
+    // Cookie YouTube (2026-11-02): hanya untuk YouTube dan hanya untuk
+    // percobaan web; percobaan Android sengaja TANPA cookie supaya
+    // cookie yang rusak tidak merusak fallback 360p.
+    if (isYoutube && !useAndroid) {
+      args.push(...getYoutubeCookiesArgs());
+    }
 
     // Hanya bila YTDLP_NO_CHECK_CERTIFICATES=true (lihat config.ts).
     if (config.ytdlpNoCheckCertificates) {
@@ -103,7 +139,6 @@ export async function ensurePreviewMedia(
       });
     } catch (err: unknown) {
       const error = err as Error;
-      activePreviewTasks.delete(safeUrl);
       return reject(new Error(`Gagal memulai pemrosesan preview: ${error.message}`));
     }
 
@@ -113,7 +148,6 @@ export async function ensurePreviewMedia(
     });
 
     child.on('close', (code) => {
-      activePreviewTasks.delete(safeUrl);
       if (code === 0 && fs.existsSync(filePath)) {
         try {
           const stats = fs.statSync(filePath);
@@ -122,15 +156,32 @@ export async function ensurePreviewMedia(
           }
         } catch {}
       }
-      reject(new Error(stderr.slice(-200) || `Pembuatan preview gagal dengan kode ${code}`));
+      // Pakai pesan lengkap (dibatasi 2000 karakter dari awal, bukan
+      // 200 karakter terakhir) supaya frasa bot-check tetap terdeteksi.
+      reject(new Error(stderr.slice(0, 2000) || `Pembuatan preview gagal dengan kode ${code}`));
     });
 
     child.on('error', (err) => {
-      activePreviewTasks.delete(safeUrl);
       reject(err);
     });
   });
 
+  // Wrapper: coba web dulu, kalau bot-check coba sekali lewat Android.
+  // Semua pemanggil yang menunggu tugas yang sama (preview-status,
+  // stream, trimmer) mendapat hasil wrapper ini, bukan cuma pemanggil
+  // pertama — perbaikan dari bug sebelumnya di mana pemanggil kedua
+  // yang menunggu tugas lama langsung gagal tanpa retry.
+  const taskPromise = (async () => {
+    try {
+      return await runPreviewAttempt(false);
+    } catch (err: unknown) {
+      const error = err as Error;
+      if (isYoutube && isBotError(error.message)) {
+        return await runPreviewAttempt(true);
+      }
+      throw err;
+    }
+  })();
   activePreviewTasks.set(safeUrl, { promise: taskPromise, startTime: Date.now() });
 
   try {
@@ -139,6 +190,11 @@ export async function ensurePreviewMedia(
   } catch (err: unknown) {
     const error = err as Error;
     return { ready: false, streamUrl, error: error.message };
+  } finally {
+    // Bersihkan map hanya kalau masih menunjuk tugas ini.
+    if (activePreviewTasks.get(safeUrl)?.promise === taskPromise) {
+      activePreviewTasks.delete(safeUrl);
+    }
   }
 }
 

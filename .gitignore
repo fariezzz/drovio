@@ -18,6 +18,11 @@ next-env.d.ts.bak
 .env
 !.env.example
 
+# YouTube cookies — token sesi, JANGAN PERNAH masuk git/patch/backup
+/data/
+youtube-cookies.txt
+*.cookies.txt
+
 # Downloads & generated user media files
 /downloads/*
 !/downloads/.gitkeep

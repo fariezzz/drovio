@@ -593,6 +593,12 @@ export default function FileCompressorSection() {
             </div>
           </div>
 
+          {result.originalKept && (
+            <p className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs text-amber-200">
+              File ini sudah tidak bisa dikecilkan lagi dengan pengaturan yang dipilih, jadi yang dikembalikan adalah file asli (bukan hasil kompresi yang justru lebih besar).
+            </p>
+          )}
+
           {/* Tombol Unduh Hasil */}
           <div className="flex flex-col sm:flex-row items-center justify-end gap-2.5 pt-1">
             <button

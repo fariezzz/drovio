@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
-import { executeConversion, detectConversionCategory } from '@/lib/converter/service';
+import { executeConversion, detectConversionCategory, isValidConversionTarget } from '@/lib/converter/service';
 import { ConversionOptions } from '@/lib/converter/types';
 import { getConfig } from '@/lib/config';
 import { isPathInside } from '@/lib/security';
@@ -27,6 +27,13 @@ export async function POST(req: NextRequest) {
 
       const originalName = file.name || 'berkas-input';
       const arrayBuffer = await file.arrayBuffer();
+      // P3: batas upload 1 GB, alasan sama seperti route compress.
+      if (arrayBuffer.byteLength > 1024 * 1024 * 1024) {
+        return NextResponse.json(
+          { success: false, error: 'Ukuran file melebihi batas 1 GB.' },
+          { status: 413 }
+        );
+      }
       const buffer = Buffer.from(arrayBuffer);
 
       let options: ConversionOptions;
@@ -41,6 +48,14 @@ export async function POST(req: NextRequest) {
       if (!options.targetFormat) {
         return NextResponse.json(
           { success: false, error: 'Format target konversi belum dipilih.' },
+          { status: 400 }
+        );
+      }
+
+      const cat1 = options.category || detectConversionCategory(originalName, file.type);
+      if (!isValidConversionTarget(cat1, options.targetFormat)) {
+        return NextResponse.json(
+          { success: false, error: `Konversi ${cat1} ke "${options.targetFormat}" tidak didukung.` },
           { status: 400 }
         );
       }
@@ -74,6 +89,14 @@ export async function POST(req: NextRequest) {
       category: detectConversionCategory(localFilename),
       targetFormat: 'mp4',
     };
+
+    const cat2 = convOptions.category || detectConversionCategory(localFilename);
+    if (!convOptions.targetFormat || !isValidConversionTarget(cat2, convOptions.targetFormat)) {
+      return NextResponse.json(
+        { success: false, error: `Konversi ${cat2} ke "${convOptions.targetFormat}" tidak didukung.` },
+        { status: 400 }
+      );
+    }
 
     const result = await executeConversion(
       localFilename,

@@ -6,6 +6,8 @@ import { sanitizeWindowsFilename } from './security';
 import { formatBytes, translateErrorMessage } from './media-service';
 import { Job, JobStatus, DownloadRequest, PlatformType } from './types';
 import { deletePreviewMedia } from './preview-service';
+import { getYoutubeCookiesArgs } from './youtube-cookies';
+import { getPotArgs } from './pot-provider';
 
 // Map pekerjaan aktif dalam memori
 interface JobRuntime {
@@ -78,6 +80,7 @@ class JobManager {
       type: request.type,
       qualityId: request.qualityId,
       qualityLabel: qualityLabels[request.qualityId] || request.qualityId,
+      youtubeClient: request.youtubeClient,
       trimStart: request.trimStart,
       trimEnd: request.trimEnd,
       trimRange,
@@ -181,11 +184,15 @@ class JobManager {
     }
   }
 
-  // Bersihkan file sementara yang tersisa
+  // Bersihkan file sementara yang tersisa — HANYA milik job ini.
+  // P2: langkah lama (2) memindai seluruh downloadDir dan menghapus SEMUA
+  // file .part/.ytdl berumur <30 menit, jadi membatalkan satu job bisa
+  // menghancurkan unduhan job lain yang sedang berjalan bersamaan
+  // (kalau MAX_CONCURRENT_DOWNLOADS > 1). Langkah itu dihapus; file
+  // yatim piatu tetap dibersihkan oleh cleanup berkala 60 menit, bukan
+  // oleh cancel job lain.
   private cleanupPartialFiles(runtime: JobRuntime) {
-    const config = getConfig();
     try {
-      // 1. Bersihkan file yang tercatat di outputCandidates jika belum komplit
       for (const filepath of runtime.outputCandidates) {
         if (fs.existsSync(filepath)) {
           try {
@@ -194,7 +201,7 @@ class JobManager {
             // Abaikan
           }
         }
-        // Cek juga file .part atau .ytdl yang berkorelasi
+        // Cek juga file .part atau .ytdl yang berkorelasi dengan job ini
         const partFile = `${filepath}.part`;
         const ytdlFile = `${filepath}.ytdl`;
         if (fs.existsSync(partFile)) {
@@ -207,23 +214,6 @@ class JobManager {
         if (fs.existsSync(ytdlFile)) {
           try {
             fs.unlinkSync(ytdlFile);
-          } catch {
-            // Abaikan
-          }
-        }
-      }
-
-      // 2. Scan direktori unduhan untuk membersihkan file part/ytdl yatim piatu yang dibuat baru-baru ini
-      const files = fs.readdirSync(config.downloadDir);
-      for (const file of files) {
-        if (file.endsWith('.part') || file.endsWith('.ytdl')) {
-          const fullPath = path.join(config.downloadDir, file);
-          try {
-            const stats = fs.statSync(fullPath);
-            // Hapus file sementara yang dibuat dalam 30 menit terakhir jika berkorelasi
-            if (Date.now() - stats.mtimeMs < 30 * 60 * 1000) {
-              fs.unlinkSync(fullPath);
-            }
           } catch {
             // Abaikan
           }
@@ -293,6 +283,27 @@ class JobManager {
       args.push('--ffmpeg-location', config.ffmpegPath);
     }
 
+    // YouTube fallback: kalau job ini sudah ditandai dari preview (atau
+    // dari retry otomatis di bawah), pakai client Android langsung.
+    // Tanpa ini, unduhan YouTube dari IP ini selalu gagal bot-check di
+    // client web, meski preview-nya sudah berhasil lewat Android.
+    if (job.youtubeClient === 'android') {
+      args.push('--extractor-args', 'youtube:player_client=android');
+    }
+
+    // Cookie YouTube (2026-11-02): hanya untuk YouTube dan hanya untuk
+    // jalur web; jalur Android sengaja TANPA cookie (jalur tanpa login).
+    // Dengan cookie, unduhan web biasanya lolos bot-check dan memberi
+    // kualitas yang dipilih (bukan terkap 360p). Kalau cookie
+    // kedaluwarsa, argumen ini kosong dan jalur Android tetap pengaman.
+    if (job.youtubeClient !== 'android' &&
+        (job.platform === 'youtube' || job.url.includes('youtube.com') || job.url.includes('youtu.be'))) {
+      args.push(...getYoutubeCookiesArgs());
+      // PO token: hanya untuk jalur web, bersama cookie. Jalur Android
+      // tidak memakainya (fallback 360p tanpa token).
+      args.push(...getPotArgs());
+    }
+
     // Tentukan header dan referer khusus platform untuk menghindari blokir 403
     if (job.platform === 'tiktok' || job.url.includes('tiktok.com')) {
       args.push('--add-header', 'Referer:https://www.tiktok.com/');
@@ -311,16 +322,22 @@ class JobManager {
     }
 
     // Tentukan opsi format
+    // P1: batas tinggi adalah batas keras. Fallback TIDAK BOLEH kembali ke
+    // format tanpa batas (bv*+ba/b / best), karena itu bisa membuat pengguna
+    // yang memilih 480p pulang membawa 4K. Kalau tidak ada format di bawah
+    // batas, yt-dlp gagal dengan jujur ("Requested format is not available")
+    // dan pesan itu diterjemahkan di media-service.ts.
     if (job.type === 'video') {
-      if (job.platform === 'tiktok' || job.url.includes('tiktok.com')) {
-        // TikTok menyediakan video dalam stream tunggal progresif
-        args.push('-f', 'bv*+ba/b/best');
-      } else if (job.qualityId === '1080p') {
-        args.push('-f', 'bv*[height<=1080]+ba/b[height<=1080] / bv*+ba/b / best');
+      if (job.qualityId === '1080p') {
+        args.push('-f', 'bv*[height<=1080]+ba/b[height<=1080]');
       } else if (job.qualityId === '720p') {
-        args.push('-f', 'bv*[height<=720]+ba/b[height<=720] / bv*+ba/b / best');
+        args.push('-f', 'bv*[height<=720]+ba/b[height<=720]');
       } else if (job.qualityId === '480p') {
-        args.push('-f', 'bv*[height<=480]+ba/b[height<=480] / bv*+ba/b / best');
+        args.push('-f', 'bv*[height<=480]+ba/b[height<=480]');
+      } else if (job.platform === 'tiktok' || job.url.includes('tiktok.com')) {
+        // TikTok menyediakan video dalam stream tunggal progresif;
+        // hanya dipakai untuk pilihan 'best' (tanpa batas).
+        args.push('-f', 'bv*+ba/b/best');
       } else {
         // Default best
         args.push('-f', 'bv*+ba/b / best');
@@ -392,7 +409,27 @@ class JobManager {
 
     let stderrBuffer = '';
 
+    // P3: stall timeout. Sebelumnya proses yt-dlp tanpa timeout sama
+    // sekali: unduhan yang macet menggantung slot antrean selamanya.
+    // Timer ini memeriksa tiap 30 detik; kalau tidak ada output apa pun
+    // selama 10 menit, proses dibunuh dan job gagal dengan pesan jelas
+    // (bukan menggantung). Output apa pun (progress/log) me-reset timer.
+    let lastActivityAt = Date.now();
+    let stallTimedOut = false;
+    const stallTimer = setInterval(() => {
+      if (Date.now() - lastActivityAt > 10 * 60 * 1000) {
+        stallTimedOut = true;
+        try { this.killProcessTree(child); } catch {}
+        clearInterval(stallTimer);
+      }
+    }, 30 * 1000);
+    // Jangan biarkan timer menahan proses Node tetap hidup sendirian.
+    if (typeof (stallTimer as unknown as { unref?: () => void }).unref === 'function') {
+      (stallTimer as unknown as { unref: () => void }).unref();
+    }
+
     child.stdout?.on('data', (data: Buffer) => {
+      lastActivityAt = Date.now();
       const text = data.toString();
       const lines = text.split(/\r?\n/);
 
@@ -453,11 +490,21 @@ class JobManager {
     });
 
     child.stderr?.on('data', (data: Buffer) => {
+      lastActivityAt = Date.now();
       stderrBuffer += data.toString();
     });
 
     child.on('close', async (code) => {
+      clearInterval(stallTimer);
       if (job.status === 'cancelled') {
+        this.cleanupPartialFiles(runtime);
+        this.processQueue();
+        return;
+      }
+
+      if (stallTimedOut) {
+        job.status = 'failed';
+        job.errorMessage = 'Unduhan macet (tidak ada progres selama 10 menit) dan dihentikan. Coba lagi nanti.';
         this.cleanupPartialFiles(runtime);
         this.processQueue();
         return;
@@ -493,13 +540,43 @@ class JobManager {
           job.errorMessage = 'Proses selesai tetapi file keluaran tidak ditemukan di direktori unduhan.';
         }
       } else {
-        // Jika gagal karena pembatasan subtitle (HTTP 429 atau error timedtext)
-        const isSubtitleRateLimit =
-          Boolean(job.subtitleLang) &&
-          (stderrBuffer.includes('subtitles') ||
-            stderrBuffer.includes('429') ||
-            stderrBuffer.includes('Too Many Requests') ||
-            stderrBuffer.includes('timedtext'));
+        // YouTube fallback otomatis: untuk job yang TIDAK dibuat lewat
+        // preview (mis. batch, atau preview lama), percobaan web yang
+        // gagal bot-check/format dicoba sekali lagi lewat Android sebelum
+        // dinyatakan gagal. Sekali saja — job.youtubeClient sudah 'android'
+        // pada percobaan kedua, jadi tidak ada loop. Percobaan ini
+        // didahulukan dari retry subtitle di bawah.
+        const isYoutube = job.platform === 'youtube' ||
+          job.url.includes('youtube.com') || job.url.includes('youtu.be');
+        const lowerStderr = stderrBuffer.toLowerCase();
+        const isBotFailure = lowerStderr.includes('sign in to confirm') ||
+          lowerStderr.includes('login required') ||
+          lowerStderr.includes('requested format is not available') ||
+          lowerStderr.includes('this video is unavailable');
+        if (isYoutube && job.youtubeClient !== 'android' && isBotFailure) {
+          job.youtubeClient = 'android';
+          // Label kualitas sengaja tidak diubah (2026-11-02, permintaan
+          // pemilik: publik "tinggal pakai", tanpa penjelasan Android/IP).
+          this.executeDownload(runtime);
+          return;
+        }
+
+        // P3: retry tanpa subtitle DIPERSEMPIT. Sebelumnya kata 'subtitles',
+        // '429', atau 'timedtext' di MANA PUN di stderr (termasuk 429 pada
+        // unduhan video itu sendiri, atau sekadar menyebut subtitle) sudah
+        // memicu unduhan ulang penuh dan menyembunyikan error asli.
+        // Sekarang hanya baris yang secara spesifik gagal mengunduh
+        // subtitle (ERROR/failed + subtitle/timedtext di baris yang sama)
+        // yang memicu retry. Sekali saja, karena subtitleLang dikosongkan.
+        const isSubtitleRateLimit = Boolean(job.subtitleLang) &&
+          stderrBuffer.split(/\r?\n/).some((line) => {
+            const l = line.toLowerCase();
+            const mentionsSubtitle = l.includes('subtitle') || l.includes('timedtext');
+            const isFailure = l.includes('error') || l.includes('failed') ||
+              l.includes('429') || l.includes('too many requests') ||
+              l.includes('unable to download');
+            return mentionsSubtitle && isFailure;
+          });
 
         if (isSubtitleRateLimit) {
           // Lakukan pengunduhan ulang otomatis tanpa subtitle agar video tetap berhasil diunduh
@@ -518,6 +595,7 @@ class JobManager {
     });
 
     child.on('error', (err) => {
+      clearInterval(stallTimer);
       if (job.status !== 'cancelled') {
         job.status = 'failed';
         job.errorMessage = `Kesalahan sistem proses: ${err.message}`;
@@ -528,7 +606,9 @@ class JobManager {
   }
 
   // Temukan file output final berdasarkan candidate dan scan direktori
-  private resolveFinalOutputFile(runtime: JobRuntime, safeTitle: string): string | null {
+  // safeTitle dipertahankan di signature agar call site tidak berubah,
+  // tapi sengaja tidak dipakai lagi sejak fallback prefix judul dihapus (P2).
+  private resolveFinalOutputFile(runtime: JobRuntime, _safeTitle: string): string | null {
     const config = getConfig();
     const { job } = runtime;
 
@@ -574,22 +654,12 @@ class JobManager {
         }
       }
 
-      // 3. Scan file yang memuat safeTitle jika ID tidak disematkan
-      for (const file of files) {
-        if (
-          file.startsWith(safeTitle.slice(0, 30)) &&
-          isTargetMedia(file, job.type) &&
-          !isSubtitleOrAux(file)
-        ) {
-          const full = path.join(config.downloadDir, file);
-          const stats = fs.statSync(full);
-          if (stats.size > 0 && stats.mtimeMs > runtime.job.createdAt - 5000) {
-            return full;
-          }
-        }
-      }
+      // P2: langkah lama (3) DIHAPUS — mencocokkan 30 karakter pertama judul
+      // + mtime bisa mengklaim file job lain dengan judul yang sama
+      // (mis. unduh video yang sama dua kali bersamaan). Sisa fallback yang
+      // aman: hanya kandidat stdout job ini sendiri, dan file ber-ID job.
 
-      // 4. Fallback ke kandidat non-subtitle apapun yang ukurannya valid
+      // 3. Fallback ke kandidat non-subtitle apapun yang ukurannya valid
       for (const cand of candidatesList.slice().reverse()) {
         if (fs.existsSync(cand) && !isSubtitleOrAux(cand)) {
           const stats = fs.statSync(cand);
@@ -613,17 +683,18 @@ class JobManager {
       const base = path.basename(filePath, ext);
       const syncedPath = path.join(dir, `${base}_synced${ext}`);
 
-      // Jalankan ffmpeg dengan normalisasi timestamp awal nol dan filter resample audio
-      // -map 0:v:0 -map 0:a? menangani video dengan atau tanpa audio tanpa error
+      // P2: normalisasi timestamp saja, TANPA re-encode audio. Sebelumnya
+      // audio selalu di-re-encode ke AAC 192k di setiap video trim —
+      // audio 128k di-upsample percuma, audio 320k diturunkan, dan proses
+      // jadi lebih lama. '-c:a copy' + avoid_negative_ts sudah cukup
+      // untuk merapikan timestamp awal tanpa kehilangan kualitas audio.
+      // -map 0:v:0 -map 0:a? menangani video dengan atau tanpa audio.
       const ffmpegArgs = [
         '-y',
         '-i', filePath,
         '-map', '0:v:0',
         '-map', '0:a?',
-        '-c:v', 'copy',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-af', 'aresample=async=1000',
+        '-c', 'copy',
         '-avoid_negative_ts', 'make_zero',
         syncedPath,
       ];

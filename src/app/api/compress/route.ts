@@ -27,6 +27,18 @@ export async function POST(req: NextRequest) {
 
       const originalName = file.name || 'file-upload';
       const arrayBuffer = await file.arrayBuffer();
+      // P3: batas upload 1 GB. Sebelumnya tidak ada batas sama sekali dan
+      // file dimuat penuh ke memori (Buffer + Sharp/gzip), jadi file raksasa
+      // bisa menghabiskan memori server. 1 GB masih longgar untuk video
+      // pada umumnya, tapi mencegah upload tanpa batas. Catatan: ini
+      // pengecekan setelah formData dimuat (keterbatasan Next.js route),
+      // bukan streaming parser — tetap lebih aman daripada tanpa batas.
+      if (arrayBuffer.byteLength > 1024 * 1024 * 1024) {
+        return NextResponse.json(
+          { success: false, error: 'Ukuran file melebihi batas 1 GB.' },
+          { status: 413 }
+        );
+      }
       const buffer = Buffer.from(arrayBuffer);
 
       let options: CompressionOptions;

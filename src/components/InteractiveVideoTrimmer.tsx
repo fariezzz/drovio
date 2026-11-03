@@ -202,6 +202,16 @@ export default function InteractiveVideoTrimmer({
   }, [isPlaying, currentTime, safeStart, safeEnd]);
 
   // Penjagaan Rentang Waktu Pemutaran (Hentikan atau Ulang saat Mencapai Titik Akhir)
+  // BUG 2026-11-02: effect ini dulu dependensinya hanya
+  // [isLoop, safeStart, safeEnd]. Saat pertama render, streamSrc masih
+  // null sehingga elemen <video> belum ada (videoRef.current === null)
+  // dan effect langsung return tanpa memasang listener. Ketika streamSrc
+  // kemudian terisi dan <video> muncul, effect TIDAK jalan ulang karena
+  // dependensinya tidak berubah — jadi 'timeupdate' tidak pernah
+  // terpasang, currentTime tidak pernah naik dari 00:00.0, dan playhead
+  // tidak pernah bergerak, meski videonya sendiri sebenarnya diputar
+  // (tombolnya sudah berubah jadi pause). streamSrc ditambahkan ke
+  // dependensi supaya listener dipasang tepat setelah <video> muncul.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -251,7 +261,7 @@ export default function InteractiveVideoTrimmer({
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('pause', handlePause);
     };
-  }, [isLoop, safeStart, safeEnd]);
+  }, [streamSrc, isLoop, safeStart, safeEnd]);
 
   // Pastikan posisi playhead selalu berada di dalam batas potongan saat handle digeser
   useEffect(() => {
@@ -506,15 +516,31 @@ export default function InteractiveVideoTrimmer({
               width: `${Math.max(endPercent - startPercent, 0.5)}%`,
             }}
             onPointerDown={(e) => handlePointerDown(e, 'middle')}
-          >
-            {/* Jarum Playhead Putih Bergerak */}
-            <div
-              className="absolute top-0 bottom-0 w-[2px] bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)] pointer-events-none z-20"
-              style={{
-                left: `${Math.max(0, Math.min(currentPercent, 100))}%`,
-              }}
-            />
-          </div>
+          />
+
+          {/* Jarum Playhead Putih Bergerak — dipindah ke level track, bukan
+              di dalam kotak seleksi. Sebelumnya playhead di 0% tepat
+              menumpuk di bawah handle kiri (handle z-30, playhead z-20)
+              sehingga di posisi awal garisnya tidak kelihatan sama
+              sekali; dan karena currentTime stuck di 0, garis itu tidak
+              pernah bergerak dari sana. Sekarang posisinya absolut
+              terhadap track penuh dan z-40 (di atas handle), jadi garis
+              tetap terlihat di bibir kiri/kanan trim, dan
+              pointer-events-none supaya drag handle tetap bisa diklik. */}
+          <div
+            className="absolute top-0 bottom-0 w-[3px] -ml-[1px] bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)] pointer-events-none z-40"
+            style={{
+              left: `${Math.max(
+                0,
+                Math.min(
+                  startPercent +
+                    (Math.max(0, Math.min(currentPercent, 100)) / 100) *
+                      (endPercent - startPercent),
+                  100
+                )
+              )}%`,
+            }}
+          />
 
           {/* Handle Kiri (Titik Mulai) dengan 3 Titik Vertikal */}
           <div

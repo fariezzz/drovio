@@ -41,6 +41,10 @@ export interface MediaPreview {
   videoQualities: QualityOption[];
   audioQualities: QualityOption[];
   subtitles?: SubtitleOption[];
+  // YouTube fallback: true bila metadata didapat lewat client Android
+  // karena client web diblokir bot-check dari IP ini. Artinya video hanya
+  // tersedia maksimal 360p tanpa login (format 18).
+  youtubeFallback?: boolean;
 }
 
 export type JobStatus =
@@ -58,6 +62,7 @@ export interface DownloadRequest {
   trimStart?: string; // misal "00:01:15"
   trimEnd?: string; // misal "00:03:45"
   subtitleLang?: string; // misal "id", "en", "none"
+  youtubeClient?: 'android'; // hanya 'android' yang diizinkan; diisi dari preview fallback
 }
 
 export interface Job {
@@ -72,6 +77,7 @@ export interface Job {
   type: 'video' | 'audio';
   qualityId: string;
   qualityLabel: string;
+  youtubeClient?: 'android';
   trimStart?: string;
   trimEnd?: string;
   trimRange?: string;

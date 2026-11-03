@@ -1,5 +1,61 @@
 import path from 'path';
+import dns from 'node:dns/promises';
 import { PlatformType } from './types';
+
+// P2: cek apakah sebuah IP termasuk privat/loopback/link-local/CGNAT.
+// Dipakai oleh checkHostResolvesPublic di bawah, BUKAN hanya untuk IP
+// literal di URL (yang sudah dicek validateAndSanitizeUrl), tapi juga
+// untuk hasil resolusi DNS hostname.
+export function isPrivateIp(ip: string): boolean {
+  const clean = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  // IPv4-mapped IPv6, mis. ::ffff:192.168.1.1
+  const mapped = clean.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateIp(mapped[1]);
+  const v4 = clean.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [, o1, o2] = v4.map(Number);
+    if (o1 === 10) return true;
+    if (o1 === 172 && o2 >= 16 && o2 <= 31) return true;
+    if (o1 === 192 && o2 === 168) return true;
+    if (o1 === 127) return true;
+    if (o1 === 169 && o2 === 254) return true;
+    if (o1 === 0) return true;
+    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true; // CGNAT 100.64/10
+    return false;
+  }
+  // IPv6: loopback, link-local, unique-local
+  if (clean === '::1') return true;
+  if (clean.startsWith('fe80')) return true;
+  if (clean.startsWith('fc') || clean.startsWith('fd')) return true;
+  return false;
+}
+
+// P2: SSRF via DNS. validateAndSanitizeUrl hanya memeriksa hostname
+// literal, jadi domain publik yang me-resolve ke IP privat (mis. domain
+// yang diarahkan ke 192.168.x.x, atau DNS rebinding) sebelumnya lolos ke
+// yt-dlp. Fungsi async ini memeriksa SEMUA hasil lookup; satu saja
+// privat = ditolak. Catatan: 198.18/15 (benchmarking) sengaja TIDAK
+// diblokir karena resolver VM ini mengembalikan alamat itu untuk domain
+// publik lewat egress proxy, dan yt-dlp memakai resolver yang sama.
+// Gagal resolve = ditolak (fail closed); yt-dlp juga akan gagal untuk
+// domain yang tidak bisa di-resolve.
+export async function checkHostResolvesPublic(hostname: string): Promise<{ ok: boolean; error?: string }> {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  try {
+    const addrs = await dns.lookup(host, { all: true });
+    if (!addrs || addrs.length === 0) {
+      return { ok: false, error: 'Domain tidak dapat di-resolve ke alamat IP publik.' };
+    }
+    for (const a of addrs) {
+      if (isPrivateIp(a.address)) {
+        return { ok: false, error: 'Domain me-resolve ke alamat jaringan privat/internal dan ditolak demi keamanan.' };
+      }
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Domain tidak dapat di-resolve ke alamat IP publik.' };
+  }
+}
 
 // Validasi URL dan proteksi SSRF / akses jaringan lokal
 export function validateAndSanitizeUrl(inputUrl: string): { valid: boolean; url?: string; error?: string } {

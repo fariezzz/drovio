@@ -105,13 +105,13 @@ export async function executeCompression(
     let tempSourceCreated = false;
 
     if (!sourcePath) {
-      sourcePath = path.join(compressedDir, `temp_${Date.now()}_${safeOriginalName}`);
+      sourcePath = path.join(compressedDir, `temp_${id}_${safeOriginalName}`);
       fs.writeFileSync(sourcePath, inputData.buffer!);
       tempSourceCreated = true;
     }
 
     try {
-      const res = await compressVideo(sourcePath, compressedDir, options.video || { level: 'medium' });
+      const res = await compressVideo(sourcePath, compressedDir, options.video || { level: 'medium' }, id);
       finalPath = res.outputPath;
       finalFilename = path.basename(finalPath);
       finalMimeType = res.mimeType;
@@ -127,13 +127,13 @@ export async function executeCompression(
     let tempSourceCreated = false;
 
     if (!sourcePath) {
-      sourcePath = path.join(compressedDir, `temp_${Date.now()}_${safeOriginalName}`);
+      sourcePath = path.join(compressedDir, `temp_${id}_${safeOriginalName}`);
       fs.writeFileSync(sourcePath, inputData.buffer!);
       tempSourceCreated = true;
     }
 
     try {
-      const res = await compressAudio(sourcePath, compressedDir, options.audio || { bitrate: '128k' });
+      const res = await compressAudio(sourcePath, compressedDir, options.audio || { bitrate: '128k' }, id);
       finalPath = res.outputPath;
       finalFilename = path.basename(finalPath);
       finalMimeType = res.mimeType;
@@ -158,8 +158,57 @@ export async function executeCompression(
     fs.writeFileSync(finalPath, finalBuffer);
   }
 
-  const finalStats = fs.statSync(finalPath);
-  const compressedSize = finalStats.size;
+  let finalStats = fs.statSync(finalPath);
+  let compressedSize = finalStats.size;
+
+  // P1: jangan pernah mengembalikan file yang LEBIH BESAR dari aslinya
+  // dengan label "terkompresi". Kalau kompresi gagal mengecilkan, kembalikan
+  // file asli (dengan nama & ekstensi aslinya) dan tandai originalKept.
+  // Sebelumnya savedPercent hanya di-clamp ke 0, tapi file yang membesar
+  // tetap dikembalikan.
+  let originalKept = false;
+  if (compressedSize >= originalSize && originalSize > 0) {
+    const originalExt = path.extname(safeOriginalName).toLowerCase();
+    const keptFilename = `${baseName} [${id}]${originalExt}`;
+    const keptPath = path.join(compressedDir, keptFilename);
+    const mimeByExt: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+      '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif',
+      '.bmp': 'image/bmp', '.tiff': 'image/tiff', '.tif': 'image/tiff',
+      '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm',
+      '.mkv': 'video/x-matroska', '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo', '.flv': 'video/x-flv', '.wmv': 'video/x-ms-wmv',
+      '.m4v': 'video/x-m4v', '.3gp': 'video/3gpp',
+      '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
+      '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.opus': 'audio/opus',
+      '.aac': 'audio/aac', '.wma': 'audio/x-ms-wma',
+      '.txt': 'text/plain', '.zip': 'application/zip',
+    };
+    try {
+      if (inputData.buffer) {
+        fs.writeFileSync(keptPath, inputData.buffer);
+      } else if (inputData.localFilePath && fs.existsSync(inputData.localFilePath)) {
+        fs.copyFileSync(inputData.localFilePath, keptPath);
+      }
+      if (fs.existsSync(keptPath) && path.resolve(keptPath) !== path.resolve(finalPath)) {
+        try { fs.unlinkSync(finalPath); } catch {}
+      }
+      finalPath = keptPath;
+      finalFilename = keptFilename;
+      // Fallback octet-stream, BUKAN mime hasil kompresi lama: file yang
+      // dikembalikan adalah file asli, jadi mis. .bin tidak boleh
+      // dilabeli application/gzip hanya karena tadinya dikompresi generic.
+      finalMimeType = mimeByExt[originalExt] || 'application/octet-stream';
+      finalStats = fs.statSync(finalPath);
+      compressedSize = finalStats.size;
+      originalKept = true;
+    } catch {
+      // Kalau penggantian gagal, biarkan hasil kompresi apa adanya;
+      // savedPercent di bawah tetap di-clamp ke 0 seperti sebelumnya.
+      finalStats = fs.statSync(finalPath);
+      compressedSize = finalStats.size;
+    }
+  }
 
   const savedBytes = Math.max(0, originalSize - compressedSize);
   const savedPercent = originalSize > 0
@@ -182,6 +231,7 @@ export async function executeCompression(
     filePath: finalPath,
     mimeType: finalMimeType,
     processingTimeMs: Date.now() - startTime,
+    originalKept,
   };
 
   const map = getCompressedMap();

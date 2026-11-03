@@ -44,8 +44,10 @@ export async function compressPdf(
         if (subtype === '/Image') {
           const filter = (anyObj.dict as any).get?.(PDFName.of('Filter'))?.toString();
 
-          // Jika gambar menggunakan kompresi DCT (JPEG)
-          if (filter === '/DCTDecode' && anyObj.contents && anyObj.contents.length > 5000) {
+          // Jika gambar menggunakan kompresi DCT (JPEG). Filter bisa
+          // berupa string '/DCTDecode' atau array yang mengandungnya,
+          // jadi cek dengan includes, bukan persamaan persis.
+          if (filter && filter.includes('DCTDecode') && anyObj.contents && anyObj.contents.length > 5000) {
             try {
               const imageBuffer = Buffer.from(anyObj.contents);
               const compressedJpg = await sharp(imageBuffer)

@@ -4,6 +4,11 @@ import { execSync } from 'child_process';
 
 export interface AppConfig {
   ytdlpPath: string;
+  // PO token provider (BGUtil, 2026-11-02): direktori plugin yt-dlp dan
+  // URL server token lokal. Keduanya opsional — kalau tidak ada, Drovio
+  // diam-diam kembali ke jalur tanpa PO token (lalu fallback Android).
+  potPluginDir: string;
+  potBaseUrl: string;
   // Opsional, default false: hanya aktifkan di lingkungan yang akses
   // internetnya lewat proxy MITM dengan CA yang tidak dipercaya bundle
   // sertifikat bawaan yt-dlp (mis. VM ini). Di PC/lokal biasa biarkan
@@ -142,6 +147,12 @@ export function getConfig(): AppConfig {
 
   cachedConfigInstance = {
     ytdlpPath: ytdlp,
+    // Default: ~/workspace/bgutil-plugins kalau Drovio jalan dari
+    // ~/workspace/drovio. Di PC tanpa BGUtil, folder ini tidak ada dan
+    // getPotArgs() akan mengembalikan [] (aman, tanpa error).
+    potPluginDir: process.env.BGUTIL_PLUGIN_DIR ||
+      path.join(process.cwd(), '..', 'bgutil-plugins'),
+    potBaseUrl: process.env.BGUTIL_BASE_URL || 'http://127.0.0.1:4416',
     ytdlpNoCheckCertificates:
       process.env.YTDLP_NO_CHECK_CERTIFICATES === 'true' ||
       process.env.YTDLP_NO_CHECK_CERTIFICATES === '1',

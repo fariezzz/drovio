@@ -7,18 +7,24 @@ import { VideoCompressionOptions, AudioCompressionOptions } from './types';
 export async function compressVideo(
   inputFilePath: string,
   outputDir: string,
-  options: VideoCompressionOptions
+  options: VideoCompressionOptions,
+  id?: string
 ): Promise<{ outputPath: string; outputFilename: string; mimeType: string }> {
   const config = getConfig();
   const baseName = path.basename(inputFilePath, path.extname(inputFilePath));
-  const outputFilename = `${baseName}-terkompresi.mp4`;
+  // P2: sematkan ID unik (cmp_...) seperti converter/downloader. Sebelumnya
+  // nama hanya `${base}-terkompresi.mp4` + counter check-then-create, jadi
+  // dua kompresi bersamaan dengan nama sama bisa memilih path yang sama
+  // dan saling timpa (FFmpeg dipanggil dengan -y).
+  const idSuffix = id ? ` [${id}]` : '';
+  const outputFilename = `${baseName}-terkompresi${idSuffix}.mp4`;
   const outputPath = path.join(outputDir, outputFilename);
 
   // Jika file keluaran sudah ada, beri sufiks unik
   let finalPath = outputPath;
   let counter = 1;
   while (fs.existsSync(finalPath)) {
-    finalPath = path.join(outputDir, `${baseName}-terkompresi-${counter}.mp4`);
+    finalPath = path.join(outputDir, `${baseName}-terkompresi${idSuffix}-${counter}.mp4`);
     counter++;
   }
 
@@ -87,17 +93,20 @@ export async function compressVideo(
 export async function compressAudio(
   inputFilePath: string,
   outputDir: string,
-  options: AudioCompressionOptions
+  options: AudioCompressionOptions,
+  id?: string
 ): Promise<{ outputPath: string; outputFilename: string; mimeType: string }> {
   const config = getConfig();
   const baseName = path.basename(inputFilePath, path.extname(inputFilePath));
-  const outputFilename = `${baseName}-terkompresi.mp3`;
+  // P2: sematkan ID unik, alasan sama seperti compressVideo di atas.
+  const idSuffix = id ? ` [${id}]` : '';
+  const outputFilename = `${baseName}-terkompresi${idSuffix}.mp3`;
   const outputPath = path.join(outputDir, outputFilename);
 
   let finalPath = outputPath;
   let counter = 1;
   while (fs.existsSync(finalPath)) {
-    finalPath = path.join(outputDir, `${baseName}-terkompresi-${counter}.mp3`);
+    finalPath = path.join(outputDir, `${baseName}-terkompresi${idSuffix}-${counter}.mp3`);
     counter++;
   }
 

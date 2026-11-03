@@ -1,8 +1,10 @@
 import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 import { getConfig } from './config';
-import { validateAndSanitizeUrl, detectPlatform } from './security';
+import { validateAndSanitizeUrl, detectPlatform, checkHostResolvesPublic } from './security';
 import { MediaPreview, QualityOption, SystemHealth } from './types';
+import { getYoutubeCookiesArgs } from './youtube-cookies';
+import { getPotArgs } from './pot-provider';
 
 // Format detik menjadi jam:menit:detik atau menit:detik
 export function formatDuration(seconds?: number): string {
@@ -45,6 +47,9 @@ export function translateErrorMessage(rawError: string): string {
   }
   if (lower.includes('unsupported url') || lower.includes('no suitable extractor')) {
     return 'Tautan URL tidak didukung oleh mesin ekstraksi atau formatnya tidak dikenali.';
+  }
+  if (lower.includes('requested format is not available') || lower.includes('format is not available')) {
+    return 'Tidak ada format video di bawah batas resolusi yang dipilih untuk media ini. Coba pilih "Kualitas Terbaik" atau resolusi yang lebih tinggi.';
   }
   if (lower.includes('timed out') || lower.includes('timeout')) {
     return 'Koneksi ke situs sumber melebihi batas waktu (timeout). Coba beberapa saat lagi.';
@@ -236,12 +241,10 @@ function estimateOptionSize(
     if (optionId === 'best' || optionId === '1080p') {
       return formatBytes(singleFileSize);
     }
-    if (optionId === '720p') {
-      return `~${formatBytes(Math.round(singleFileSize * 0.65))}`;
-    }
-    if (optionId === '480p') {
-      return `~${formatBytes(Math.round(singleFileSize * 0.35))}`;
-    }
+    // P3: HAPUS pengali mentah 0,65x (720p) dan 0,35x (480p) dari sebelumnya.
+    // Angka itu tebakan yang disajikan seolah hasil ukur. Untuk 720p/480p
+    // pada file tunggal, biarkan jatuh ke estimasi berbasis durasi di
+    // bawah (tetap diberi tanda ~), bukan pengali file asli.
   }
 
   // Estimasi durasi standar jika bitrate stream spesifik tidak ada
@@ -262,6 +265,35 @@ function estimateOptionSize(
 
 // Ekstraksi metadata media tanpa mengunduh file
 export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
+  return inspectMediaAttempt(rawUrl, false);
+}
+
+// Apakah info yt-dlp punya format media yang bisa diunduh (bukan hanya
+// storyboard)? Client web yang kena bot-check mengembalikan JSON tanpa
+// format media sama sekali, atau gagal dengan 'Requested format is not
+// available' — keduanya harus memicu fallback Android, bukan sukses palsu.
+function hasMediaFormat(info: any): boolean {
+  const formats: any[] = Array.isArray(info?.formats) ? info.formats : [];
+  return formats.some((f) =>
+    f &&
+    typeof f.url === 'string' &&
+    f.url.startsWith('http') &&
+    ((f.vcodec && f.vcodec !== 'none') || (f.acodec && f.acodec !== 'none')) &&
+    !String(f.format_id || '').startsWith('sb')
+  );
+}
+
+function isYoutubeBotError(stderrData: string): boolean {
+  const lower = (stderrData || '').toLowerCase();
+  return lower.includes('sign in to confirm') ||
+    lower.includes('login required') ||
+    lower.includes('requested format is not available') ||
+    lower.includes('this video is unavailable') ||
+    lower.includes('does not look like a netscape') ||
+    lower.includes('cookies');
+}
+
+async function inspectMediaAttempt(rawUrl: string, useAndroid: boolean): Promise<MediaPreview> {
   const config = getConfig();
 
   // Validasi keamanan URL
@@ -273,6 +305,12 @@ export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
   const safeUrl = valResult.url;
   const platformInfo = detectPlatform(safeUrl);
 
+  // P2: cek resolusi DNS sebelum yt-dlp dipanggil (SSRF via DNS).
+  const dnsCheck = await checkHostResolvesPublic(new URL(safeUrl).hostname);
+  if (!dnsCheck.ok) {
+    throw new Error(dnsCheck.error || 'Domain ditolak demi keamanan.');
+  }
+
   return new Promise((resolve, reject) => {
     const args = [
       '-J',
@@ -280,8 +318,32 @@ export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
       '--no-playlist',
       '--skip-download',
       '--socket-timeout', '20',
-      safeUrl,
     ];
+
+    // YouTube fallback (2026-11-02): client web dari IP VM ini kena
+    // bot-check YouTube — player API web mengembalikan tanpa format media
+    // sama sekali. Client Android masih mengembalikan format 18 (360p),
+    // jadi itu satu-satunya jalur tanpa login/cookies saat ini. Hanya
+    // dipakai sebagai percobaan kedua untuk YouTube, bukan untuk platform
+    // lain dan bukan sebagai client utama (supaya video yang masih bisa
+    // HD lewat web tidak ikut terkap ke 360p).
+    if (useAndroid) {
+      args.push('--extractor-args', 'youtube:player_client=android');
+    }
+    // Cookie YouTube (2026-11-02): kalau pengguna sudah mengupload
+    // cookie akunnya sendiri, client web dicoba dengan cookie itu dulu
+    // — dengan cookie, web biasanya lolos bot-check dan memberi HD,
+    // sehingga fallback Android tidak terpicu. Hanya untuk YouTube, dan
+    // hanya untuk percobaan web: Android adalah jalur tanpa login, jadi
+    // percobaan Android sengaja TANPA cookie supaya cookie yang rusak
+    // atau kedaluwarsa tidak ikut merusak fallback 360p.
+    if (platformInfo.platform === 'youtube' && !useAndroid) {
+      args.push(...getYoutubeCookiesArgs());
+      // PO token: hanya bersama cookie, hanya untuk web. Tanpa cookie,
+      // getPotArgs() kosong; tanpa server/plugin, juga kosong.
+      args.push(...getPotArgs());
+    }
+    args.push(safeUrl);
 
     // Hanya bila YTDLP_NO_CHECK_CERTIFICATES=true (lihat config.ts):
     // lingkungan dengan egress proxy MITM yang CA-nya tidak dipercaya
@@ -320,12 +382,31 @@ export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
       clearTimeout(timeout);
 
       if (code !== 0 || !stdoutData.trim()) {
+        // Percobaan kedua lewat Android, hanya untuk YouTube dan hanya
+        // untuk error bot/format. Kalau Android juga gagal, kembalikan
+        // error ASLI dari web (pesan login) — bukan error Android yang
+        // lebih membingungkan ('format not available').
+        if (!useAndroid && platformInfo.platform === 'youtube' && isYoutubeBotError(stderrData)) {
+          inspectMediaAttempt(rawUrl, true).then(resolve).catch(() => {
+            const errorMsg = translateErrorMessage(stderrData || 'Gagal mengambil metadata media.');
+            reject(new Error(errorMsg));
+          });
+          return;
+        }
         const errorMsg = translateErrorMessage(stderrData || 'Gagal mengambil metadata media.');
         return reject(new Error(errorMsg));
       }
 
       try {
         const info = JSON.parse(stdoutData);
+
+        // Web sukses JSON tapi tanpa format media = bot-check terselubung.
+        if (!useAndroid && platformInfo.platform === 'youtube' && !hasMediaFormat(info)) {
+          inspectMediaAttempt(rawUrl, true).then(resolve).catch(() => {
+            reject(new Error('Konten memerlukan login atau verifikasi usia dari platform sumber.'));
+          });
+          return;
+        }
 
         const duration = typeof info.duration === 'number' ? info.duration : undefined;
 
@@ -465,6 +546,24 @@ export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
           directStreamUrl = safeUrl;
         }
 
+        // Kalau fallback Android, jangan tawarkan 1080p/720p/480p yang
+        // sebenarnya tidak ada — Android hanya memberi format 18 (360p),
+        // dan pilihan lain akan diam-diam jatuh ke 360p juga. Satu opsi
+        // 360p saja. Labelnya sengaja netral (2026-11-02, permintaan
+        // pemilik: situs publik "tinggal pakai", tanpa penjelasan soal
+        // IP/bot-check/login di UI).
+        const effectiveVideoQualities = useAndroid
+          ? [{
+              id: 'best',
+              label: '360p',
+              resolution: '640x360',
+              format: 'mp4' as const,
+              type: 'video' as const,
+              description: 'Kualitas standar, ukuran ringkas.',
+              sizeFormatted: estimateOptionSize('best', 'video', info),
+            }]
+          : videoQualities;
+
         const preview: MediaPreview = {
           id: info.id || `media-${Date.now()}`,
           url: safeUrl,
@@ -477,9 +576,10 @@ export async function inspectMedia(rawUrl: string): Promise<MediaPreview> {
           durationFormatted: formatDuration(duration),
           thumbnail,
           description: info.description ? info.description.slice(0, 200) : undefined,
-          videoQualities,
+          videoQualities: effectiveVideoQualities,
           audioQualities,
           subtitles: subtitles.slice(0, 20),
+          youtubeFallback: useAndroid || undefined,
         };
 
         resolve(preview);

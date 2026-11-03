@@ -21,7 +21,7 @@ interface MediaPreviewCardProps {
   onStartDownload: (
     type: 'video' | 'audio',
     qualityId: string,
-    options?: { trimStart?: string; trimEnd?: string; subtitleLang?: string }
+    options?: { trimStart?: string; trimEnd?: string; subtitleLang?: string; youtubeClient?: 'android' }
   ) => void;
   isStarting: boolean;
 }
@@ -68,6 +68,11 @@ export default function MediaPreviewCard({
         selectedType === 'video' && selectedSubtitle !== 'none'
           ? selectedSubtitle
           : undefined,
+      // Kalau preview didapat lewat fallback Android, unduhan harus
+      // langsung pakai Android juga — kalau tidak, unduhan akan mencoba
+      // web dulu, gagal bot-check, baru retry (buang waktu, tapi tetap
+      // berhasil lewat retry otomatis di job-queue).
+      youtubeClient: preview.youtubeFallback ? 'android' : undefined,
     });
   };
 

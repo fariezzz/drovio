@@ -54,4 +54,7 @@ export interface CompressionResult {
   filePath: string;
   mimeType: string;
   processingTimeMs: number;
+  // P1: true bila hasil kompresi ternyata >= ukuran asli, sehingga file
+  // yang dikembalikan adalah file asli (bukan hasil kompresi yang membesar).
+  originalKept?: boolean;
 }

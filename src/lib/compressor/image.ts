@@ -45,6 +45,20 @@ export async function compressImage(
 
   const baseName = path.basename(filename, path.extname(filename));
 
+  // P2: format 'original' sebelumnya jatuh ke default JPEG untuk SEMUA
+  // format yang tidak dikenali switch (gif/avif/bmp/tiff) — GIF animasi
+  // diam-diam jadi JPEG statis, transparansi hilang. Sekarang tiap format
+  // ditangani eksplisit; GIF animasi dikembalikan apa adanya (Sharp tidak
+  // bisa mempertahankan animasi) sehingga pengecekan P1 di service akan
+  // mengembalikannya sebagai file asli, bukan JPEG rusak.
+  if (targetFormat === 'gif' && (metadata.pages || 1) > 1) {
+    return {
+      buffer: inputBuffer,
+      outputFilename: `${baseName}-terkompresi.gif`,
+      mimeType: 'image/gif',
+    };
+  }
+
   switch (targetFormat) {
     case 'webp':
       pipeline = pipeline.webp({
@@ -68,6 +82,46 @@ export async function compressImage(
         buffer: await pipeline.toBuffer(),
         outputFilename: `${baseName}-terkompresi.png`,
         mimeType: 'image/png',
+      };
+
+    case 'avif':
+      pipeline = pipeline.avif({
+        quality: currentQuality.avif,
+        effort: 5,
+      });
+      return {
+        buffer: await pipeline.toBuffer(),
+        outputFilename: `${baseName}-terkompresi.avif`,
+        mimeType: 'image/avif',
+      };
+
+    case 'tiff':
+    case 'tif':
+      pipeline = pipeline.tiff({
+        compression: 'lzw',
+        quality: currentQuality.pngQuality,
+      });
+      return {
+        buffer: await pipeline.toBuffer(),
+        outputFilename: `${baseName}-terkompresi.tiff`,
+        mimeType: 'image/tiff',
+      };
+
+    case 'gif':
+      pipeline = pipeline.gif();
+      return {
+        buffer: await pipeline.toBuffer(),
+        outputFilename: `${baseName}-terkompresi.gif`,
+        mimeType: 'image/gif',
+      };
+
+    case 'bmp':
+      // Sharp tidak punya encoder BMP; kembalikan asli daripada
+      // diam-diam mengubahnya jadi JPEG (P1 akan menandainya originalKept).
+      return {
+        buffer: inputBuffer,
+        outputFilename: `${baseName}-terkompresi.bmp`,
+        mimeType: 'image/bmp',
       };
 
     case 'jpeg':

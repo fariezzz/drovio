@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJobManager } from '@/lib/job-queue';
-import { validateAndSanitizeUrl, detectPlatform } from '@/lib/security';
+import { validateAndSanitizeUrl, detectPlatform, checkHostResolvesPublic } from '@/lib/security';
 import { DownloadRequest, Job } from '@/lib/types';
 import { deletePreviewMedia } from '@/lib/preview-service';
 import { getOrCreateSessionId, setPrivateSessionCookie } from '@/lib/private-history';
@@ -59,6 +59,13 @@ export async function POST(req: NextRequest) {
       const validation = validateAndSanitizeUrl(item.url);
       if (!validation.valid || !validation.url) {
         errors.push({ url: item.url, error: validation.error || 'URL tidak valid' });
+        continue;
+      }
+
+      // P2: cek resolusi DNS per item (SSRF via DNS).
+      const dnsCheck = await checkHostResolvesPublic(new URL(validation.url).hostname);
+      if (!dnsCheck.ok) {
+        errors.push({ url: item.url, error: dnsCheck.error || 'Domain ditolak demi keamanan.' });
         continue;
       }
 
