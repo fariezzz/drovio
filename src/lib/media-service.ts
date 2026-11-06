@@ -219,6 +219,17 @@ function estimateOptionSize(
     }
   }
 
+  if (candidateVideo && !(candidateVideo.filesize || candidateVideo.filesize_approx)) {
+    const pool =
+      targetH === null
+        ? videoOnlyStreams
+        : videoOnlyStreams.filter((f) => (f.height || 0) <= targetH);
+    const exactPool = pool.filter((f) => f.filesize || f.filesize_approx);
+    if (exactPool.length > 0) {
+      candidateVideo = exactPool[exactPool.length - 1];
+    }
+  }
+
   if (candidateVideo) {
     let videoBytes = candidateVideo.filesize || candidateVideo.filesize_approx;
     if (!videoBytes && (candidateVideo.vbr || candidateVideo.tbr) && duration) {
